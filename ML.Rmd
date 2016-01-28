@@ -1,0 +1,258 @@
+---
+title: "Practical Machine Learning assignment"
+author: "Carlos Santillan"
+date: "January 27, 2016"
+output: html_document
+---
+
+# Practical Machine Learning 
+```{r setup ,echo=FALSE,warning=FALSE, message=FALSE}
+rm(list = ls())
+# load libraries
+library(caret)
+library(corrplot)
+library(rattle)
+library(tree)
+library(rpart.plot)
+library(randomForest)
+
+```
+
+## Synopsis
+Background
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement - a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset).
+
+
+The training data for this project are available here:
+
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+
+The test data are available here:
+
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+
+The data for this project come from this source: http://groupware.les.inf.puc-rio.br/har
+
+#Data Processing
+
+Check if data is available , if not download it from repository and load
+
+```{r donwloaddata}
+
+setwd("E:/data/ML")
+#check if directory exists
+if (!file.exists("data"))
+{
+  dir.create("data")
+}
+if (!file.exists("data/pml-training.csv")) {
+  download.file("http://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv", destfile = "data/pml-training.csv")
+}
+if (!file.exists("data/pml-testing.csv")) {
+  download.file("http://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv", destfile = "data/pml-testing.csv")
+}
+pmlTesting <- read.csv("data/pml-testing.csv", sep = ",", na.strings = c("", "NA"))
+pmlTraining <- read.csv("data/pml-training.csv", sep = ",", na.strings = c("", "NA"))
+
+```
+
+##Loading and Preprocession of the data
+Loading the file, and do a bit of data cleanup 
+
+```{r loaddata}
+
+# Load the Training Dataset
+pmlTraining <- read.csv("data/pml-training.csv", sep = ",", na.strings = c("", "NA"))
+
+# Load the Testing Dataset 
+pmlTesting <- read.csv("data/pml-testing.csv", sep = ",", na.strings = c("", "NA"))
+
+# remove variables that are moslty NA
+pmlTraining <- pmlTraining[ , colSums(is.na(pmlTraining)) == 0]
+
+# remove non predictive variables
+CleanIndex <-  which(names(pmlTraining) %in% c('X', 'user_name', 'raw_timestamp_part_1', 'raw_timestamp_part_2', 'cvtd_timestamp', 'new_window','num_window'))
+                      
+pmlTraining <- pmlTraining[, -CleanIndex]
+
+# Remove the classe variable (this is what we are trying to predict)
+#pmlTraining <- pmlTraining[, -53]
+
+
+
+
+
+```
+
+
+# Analysis
+
+Remove variables near Zero Variance since they do not contribute to the model
+Also remove variables that are Highly correlated 
+
+```{r Analysis}
+
+# Remove variables near Zero Variance (they won't contribute to the model)
+zv <- nearZeroVar(pmlTraining[sapply(pmlTraining, is.numeric)], saveMetrics = TRUE)
+pmlTraining <- pmlTraining[, -zv[, 'nzv']==0]
+
+pmlTrainingold <-pmlTraining
+pmlTraining <-pmlTrainingold
+
+correlMatrix <- cor(na.omit(pmlTraining[sapply(pmlTraining, is.numeric)]))
+
+pmlTraining_low <- pmlTraining[,-findCorrelation(correlMatrix, cutoff = .90, verbose = TRUE)]
+
+
+corrplot(correlMatrix, order = "FPC", method = "shade", type = "lower", tl.cex = 0.8, 
+    tl.col = rgb(0, 0, 0))
+
+
+dim (pmlTraining_low)
+
+
+
+```
+
+
+We are not left with 46 Variables and 19,622 observations
+
+## Generate Training an Test set to be used in cross validation
+```{r TandTSet}
+ set.seed(123)
+
+inTrain <- createDataPartition(y=pmlTraining_low$classe, p=0.8, list=FALSE)
+trainingSet <- pmlTraining_low[inTrain,];   # 80%
+testingSet  <- pmlTraining_low[-inTrain,]   # 20%
+
+
+```
+
+## Regression Tree
+
+Train Models
+
+```{r rtree}
+
+treeTraining=tree(classe~.,data=trainingSet)
+
+modFit <- train(classe ~ .,method="rpart",data=trainingSet) #slow
+print(modFit$finalModel)
+
+```
+
+
+### Plot our model
+
+
+```{r plottree}
+
+plot(treeTraining)
+text(treeTraining, cex =.8)
+
+fancyRpartPlot(modFit$finalModel)
+```
+
+``` {r supportfunction ,results="asis"}
+  testModel <- function (Predictions,testset)
+  {
+    predictionMatrix = with(testset,table(Predictions,classe))
+    sum(diag(predictionMatrix))/sum(as.vector(predictionMatrix)) # error rate
+  }
+
+```
+
+## Test Model
+
+```{r testtree}
+  Predictions=predict(treeTraining,testingSet,type="class")
+  testModel(Predictions,testingSet)
+
+```
+
+
+```{r test}
+  Predictions=predict(modFit,testingSet)
+  testModel(Predictions,testingSet)
+```
+
+
+Not very good accuracy
+
+## Cross Validate
+
+``` {r xValidate}
+
+xvtraining=cv.tree(treeTraining,FUN=prune.misclass)
+xvtraining
+
+
+```
+
+```{r plotxValidate}
+
+plot(xvtraining)
+
+```
+
+lets prune and test
+
+```{r prune}
+
+prunetraining=prune.misclass(treeTraining,best=19)
+Predictions=predict(prunetraining,testingSet,type="class")
+testModel(Predictions,testingSet)
+
+```
+
+
+66% is a good result 
+
+
+## Random Forest
+
+```{r randomforest}
+rf=randomForest(classe~.,data=trainingSet,ntree=100, importance=TRUE)
+rf
+
+```
+
+Only used 6 variables at each split, 
+
+Plot Random foreset
+
+```{r plotrf}
+
+  varImpPlot(rf,)
+
+```
+
+
+Test how random forest did
+
+```{r testrf}
+
+Predictions=predict(rf,testingSet,type="class")
+testModel(Predictions,testingSet)
+
+```
+
+99% accuracy very good model
+
+## lets make prediction 
+
+```{r final}
+
+finalpredictions <- predict(rf,pmlTesting)
+finalpredictions
+
+
+```
+
+
+```{r session}
+sessionInfo() 
+
+```
